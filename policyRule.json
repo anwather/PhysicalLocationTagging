@@ -1,0 +1,102 @@
+{
+    "mode": "Indexed",
+    "policyRule": {
+        "if": {
+            "allOf": [
+                {
+                    "field": "type",
+                    "equals": "Microsoft.Compute/virtualMachines"
+                },
+                {
+                    "field": "[concat('tags[', parameters('tagName'), ']')]",
+                    "exists": "false"
+                }
+            ]
+        },
+        "then": {
+            "effect": "deployIfNotExists",
+            "details": {
+                "type": "Microsoft.Compute/virtualMachines",
+                "name": "[field('name')]",
+                "existenceCondition": {
+                    "field": "name",
+                    "equals": "[parameters('RemediationIdentity')]"
+                },
+                "roleDefinitionIds": [
+                    "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+                ],
+                "deployment": {
+                    "properties": {
+                        "mode": "Incremental",
+                        "template": {
+                            "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+                            "contentVersion": "1.0.0.0",
+                            "parameters": {
+                                "VMResourceId": {
+                                    "type": "string"
+                                },
+                                "timeNow": {
+                                    "type": "String",
+                                    "defaultValue": "[utcNow()]"
+                                },
+                                "RemediationIdentity": {
+                                    "type": "String"
+                                }
+                            },
+                            "variables": {},
+                            "resources": [
+                                {
+                                    "type": "Microsoft.Resources/deploymentScripts",
+                                    "apiVersion": "2020-10-01",
+                                    "name": "[concat('deploymentScript-',uniqueString(parameters('VMResourceId')),'-',parameters('timeNow'))]",
+                                    "location": "[resourceGroup().location]",
+                                    "kind": "AzurePowerShell",
+                                    "identity": {
+                                        "type": "UserAssigned",
+                                        "userAssignedIdentities": {
+                                            "[parameters('RemediationIdentity')]": {}
+                                        }
+                                    },
+                                    "properties": {
+                                        "forceUpdateTag": "1",
+                                        "azPowerShellVersion": "10.0",
+                                        "arguments": "[concat('-VMResourceId ',parameters('VMResourceId'))]",
+                                        "retentionInterval": "P1D",
+                                        "cleanupPreference": "OnSuccess",
+                                        "scriptcontent": "Param($vmResourceId)\r\n\r\nConnect-AzAccount -Identity\r\n\r\nSelect-AzSubscription -SubscriptionId $($vmResourceId.Split(\"/\")[2])\r\n\r\n$details = Get-AzVM -ResourceId $vmResourceId | Select-Object Location, Zones\r\n\r\nif ($null -ne $details.Zones) {\r\n    $physicalZone = ((((Invoke-AzRestMethod -Uri \"https://management.azure.com/subscriptions/$($vmResourceId.Split(\"/\")[2])/locations?api-version=2022-12-01\").Content | ConvertFrom-Json).value | Where-Object name -eq $details.Location).availabilityZoneMappings | Where-Object logicalZone -eq $details.Zones).physicalZone\r\n}\r\nelse {\r\n    $physicalZone = \"No Zone Assigned\"\r\n}\r\n\r\nUpdate-AzTag -ResourceId $vmResourceId -Tag @{PhysicalZone = $physicalZone } -Operation Merge"
+                                    }
+                                }
+                            ],
+                            "outputs": {}
+                        },
+                        "parameters": {
+                            "VMResourceId": {
+                                "value": "[field('id')]"
+                            },
+                            "RemediationIdentity": {
+                                "value": "[parameters('RemediationIdentity')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "parameters": {
+        "RemediationIdentity": {
+            "type": "String",
+            "metadata": {
+                "displayName": "RemediationIdentity",
+                "description": "Resoure ID for the user-assigned managed identity to be used for remediation deployment."
+            }
+        },
+        "tagName": {
+            "type": "String",
+            "metadata": {
+                "displayName": "tagName",
+                "description": "Name of the tag to be added to the resource."
+            },
+            "defaultValue": "PhysicalZone"
+        }
+    }
+}
